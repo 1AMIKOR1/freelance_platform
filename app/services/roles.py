@@ -1,7 +1,7 @@
 from app.exceptions.base import ObjectAlreadyExistsError
 from app.exceptions.roles import RoleNotFoundError, RoleAlreadyExistsError
-from app.schemes.roles import SRoleAdd
-from app.schemes.relations_users_roles import SRoleGetWithRels
+from app.schemas.roles import SRoleAdd
+from app.schemas.relations_users_roles import SRoleGetWithRels
 from app.services.base import BaseService
 
 

@@ -1,0 +1,388 @@
+# Анализ проекта
+
+## Файл: .venv\Lib\site-packages\aiosqlite\context.py
+```
+# Copyright Amethyst Reese
+# Licensed under the MIT license
+
+
+from collections.abc import Coroutine, Generator
+from contextlib import AbstractAsyncContextManager
+from functools import wraps
+from typing import Any, Callable, TypeVar
+
+from .cursor import Cursor
+
+_T = TypeVar("_T")
+
+
+class Result(AbstractAsyncContextManager[_T], Coroutine[Any, Any, _T]):
+    __slots__ = ("_coro", "_obj")
+
+    def __init__(self, coro: Coroutine[Any, Any, _T]):
+        self._coro = coro
+        self._obj: _T
+
+    def send(self, value) -> None:
+        return self._coro.send(value)
+
+    def throw(self, typ, val=None, tb=None) -> None:
+        if val is None:
+            return self._coro.throw(typ)
+
+        if tb is None:
+            return self._coro.throw(typ, val)
+
+        return self._coro.throw(typ, val, tb)
+
+    def close(self) -> None:
+        return self._coro.close()
+
+    def __await__(self) -> Generator[Any, None, _T]:
+        return self._coro.__await__()
+
+    async def __aenter__(self) -> _T:
+        self._obj = await self._coro
+        return self._obj
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        if isinstance(self._obj, Cursor):
+            await self._obj.close()
+
+
+def contextmanager(
+    method: Callable[..., Coroutine[Any, Any, _T]],
+```
+
+## Файл: .venv\Lib\site-packages\aiosqlite\core.py
+```
+# Copyright Amethyst Reese
+# Licensed under the MIT license
+
+"""
+Core implementation of aiosqlite proxies
+"""
+
+import asyncio
+import logging
+import sqlite3
+from collections.abc import AsyncIterator, Generator, Iterable
+from functools import partial
+from pathlib import Path
+from queue import Empty, Queue, SimpleQueue
+from threading import Thread
+from typing import Any, Callable, Literal, Optional, Union
+from warnings import warn
+
+from .context import contextmanager
+from .cursor import Cursor
+
+__all__ = ["connect", "Connection", "Cursor"]
+
+AuthorizerCallback = Callable[[int, str, str, str, str], int]
+
+LOG = logging.getLogger("aiosqlite")
+
+
+IsolationLevel = Optional[Literal["DEFERRED", "IMMEDIATE", "EXCLUSIVE"]]
+
+
+def set_result(fut: asyncio.Future, result: Any) -> None:
+    """Set the result of a future if it hasn't been set already."""
+    if not fut.done():
+        fut.set_result(result)
+
+
+def set_exception(fut: asyncio.Future, e: BaseException) -> None:
+    """Set the exception of a future if it hasn't been set already."""
+    if not fut.done():
+        fut.set_exception(e)
+
+
+_STOP_RUNNING_SENTINEL = object()
+
+
+def _connection_worker_thread(
+    tx: SimpleQueue[tuple[asyncio.Future, Callable[[], Any]]],
+):
+    """
+```
+
+## Файл: .venv\Lib\site-packages\aiosqlite\cursor.py
+```
+# Copyright Amethyst Reese
+# Licensed under the MIT license
+
+import sqlite3
+from collections.abc import AsyncIterator, Iterable
+from typing import Any, Callable, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .core import Connection
+
+
+class Cursor:
+    def __init__(self, conn: "Connection", cursor: sqlite3.Cursor) -> None:
+        self.iter_chunk_size = conn._iter_chunk_size
+        self._conn = conn
+        self._cursor = cursor
+
+    def __aiter__(self) -> AsyncIterator[sqlite3.Row]:
+        """The cursor proxy is also an async iterator."""
+        return self._fetch_chunked()
+
+    async def _fetch_chunked(self):
+        while True:
+            rows = await self.fetchmany(self.iter_chunk_size)
+            if not rows:
+                return
+            for row in rows:
+                yield row
+
+    async def _execute(self, fn, *args, **kwargs):
+        """Execute the given function on the shared connection's thread."""
+        return await self._conn._execute(fn, *args, **kwargs)
+
+    async def execute(
+        self, sql: str, parameters: Optional[Iterable[Any]] = None
+    ) -> "Cursor":
+        """Execute the given query."""
+        if parameters is None:
+            parameters = []
+        await self._execute(self._cursor.execute, sql, parameters)
+        return self
+
+    async def executemany(
+        self, sql: str, parameters: Iterable[Iterable[Any]]
+    ) -> "Cursor":
+        """Execute the given multiquery."""
+        await self._execute(self._cursor.executemany, sql, parameters)
+        return self
+
+    async def executescript(self, sql_script: str) -> "Cursor":
+```
+
+## Файл: .venv\Lib\site-packages\aiosqlite\tests\helpers.py
+```
+# Copyright Amethyst Reese
+# Licensed under the MIT license
+
+import logging
+import sys
+
+
+def setup_logger():
+    log = logging.getLogger("")
+    log.setLevel(logging.INFO)
+
+    logging.addLevelName(logging.ERROR, "E")
+    logging.addLevelName(logging.WARNING, "W")
+    logging.addLevelName(logging.INFO, "I")
+    logging.addLevelName(logging.DEBUG, "V")
+
+    date_fmt = r"%H:%M:%S"
+    verbose_fmt = (
+        "%(asctime)s,%(msecs)d %(levelname)s "
+        "%(module)s:%(funcName)s():%(lineno)d   "
+        "%(message)s"
+    )
+
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter(verbose_fmt, date_fmt))
+    log.addHandler(handler)
+
+    return log
+
+```
+
+## Файл: .venv\Lib\site-packages\aiosqlite\tests\perf.py
+```
+# Copyright Amethyst Reese
+# Licensed under the MIT license
+
+"""
+Simple perf tests for aiosqlite and the asyncio run loop.
+"""
+import sqlite3
+import string
+import tempfile
+import time
+
+from unittest import IsolatedAsyncioTestCase as TestCase
+
+import aiosqlite
+from .smoke import setup_logger
+
+TEST_DB = ":memory:"
+TARGET = 2.0
+RESULTS = {}
+
+
+def timed(fn, name=None):
+    """
+    Decorator for perf testing a block of async code.
+
+    Expects the wrapped function to return an async generator.
+    The generator should do setup, then yield when ready to start perf testing.
+    The decorator will then pump the generator repeatedly until the target
+    time has been reached, then close the generator and print perf results.
+    """
+
+    name = name or fn.__name__
+
+    async def wrapper(*args, **kwargs):
+        gen = fn(*args, **kwargs)
+
+        await gen.asend(None)
+        count = 0
+        before = time.time()
+
+        while True:
+            count += 1
+            value = time.time() - before < TARGET
+            try:
+                if value:
+                    await gen.asend(value)
+                else:
+                    await gen.aclose()
+                    break
+
+```
+
+## Файл: .venv\Lib\site-packages\aiosqlite\tests\smoke.py
+```
+# Copyright Amethyst Reese
+# Licensed under the MIT license
+
+import asyncio
+import sqlite3
+import sys
+from pathlib import Path
+from sqlite3 import OperationalError
+from tempfile import TemporaryDirectory
+from threading import Thread
+from unittest import IsolatedAsyncioTestCase, SkipTest
+from unittest.mock import patch
+
+import aiosqlite
+from .helpers import setup_logger
+
+
+class SmokeTest(IsolatedAsyncioTestCase):
+    @classmethod
+    def setUpClass(cls):
+        setup_logger()
+
+    def setUp(self):
+        td = TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        self.db = Path(td.name).resolve() / "test.db"
+
+    async def test_connection_await(self):
+        db = await aiosqlite.connect(self.db)
+        self.assertIsInstance(db, aiosqlite.Connection)
+
+        async with db.execute("select 1, 2") as cursor:
+            rows = await cursor.fetchall()
+            self.assertEqual(rows, [(1, 2)])
+
+        await db.close()
+
+    async def test_connection_context(self):
+        async with aiosqlite.connect(self.db) as db:
+            self.assertIsInstance(db, aiosqlite.Connection)
+
+            async with db.execute("select 1, 2") as cursor:
+                rows = await cursor.fetchall()
+                self.assertEqual(rows, [(1, 2)])
+
+    async def test_connection_locations(self):
+        TEST_DB = self.db.as_posix()
+
+        class Fake:  # pylint: disable=too-few-public-methods
+            def __str__(self):
+```
+
+## Файл: .venv\Lib\site-packages\aiosqlite\tests\__init__.py
+```
+# Copyright Amethyst Reese
+# Licensed under the MIT license
+
+from .smoke import SmokeTest
+
+```
+
+## Файл: .venv\Lib\site-packages\aiosqlite\tests\__main__.py
+```
+# Copyright Amethyst Reese
+# Licensed under the MIT license
+
+import unittest
+
+if __name__ == "__main__":
+    unittest.main(module="aiosqlite.tests", verbosity=2)
+
+```
+
+## Файл: .venv\Lib\site-packages\aiosqlite\__init__.py
+```
+# Copyright Amethyst Reese
+# Licensed under the MIT license
+
+"""asyncio bridge to the standard sqlite3 module"""
+
+from sqlite3 import (  # pylint: disable=redefined-builtin
+    DatabaseError,
+    Error,
+    IntegrityError,
+    NotSupportedError,
+    OperationalError,
+    paramstyle,
+    ProgrammingError,
+    register_adapter,
+    register_converter,
+    Row,
+    sqlite_version,
+    sqlite_version_info,
+    Warning,
+)
+
+__author__ = "Amethyst Reese"
+from .__version__ import __version__
+from .core import connect, Connection, Cursor
+
+__all__ = [
+    "__version__",
+    "paramstyle",
+    "register_adapter",
+    "register_converter",
+    "sqlite_version",
+    "sqlite_version_info",
+    "connect",
+    "Connection",
+    "Cursor",
+    "Row",
+    "Warning",
+    "Error",
+    "DatabaseError",
+    "IntegrityError",
+    "ProgrammingError",
+    "OperationalError",
+    "NotSupportedError",
+]
+
+```
+
+## Файл: .venv\Lib\site-packages\aiosqlite\__version__.py
+```
+"""
+This file is automatically generated by attribution.
+
+Do not edit manually. Get more info at https://attribution.omnilib.dev
+"""
+
+__version__ = "0.22.0"
+
+```
+

@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import Depends, Request
 from pydantic import BaseModel, Field
 
-from app.database.database import async_session_maker
+from app.database.database import async_session_maker, get_db
 from app.exceptions.auth import (
     InvalidJWTTokenError,
     InvalidTokenHTTPError,
@@ -11,6 +11,11 @@ from app.exceptions.auth import (
 )
 from app.services.auth import AuthService
 from app.database.db_manager import DBManager
+from app.models.users import UserModel
+from app.models.roles import RoleModel
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from fastapi import HTTPException, status
 
 
 class PaginationParams(BaseModel):
@@ -37,6 +42,39 @@ def get_current_user_id(token: str = Depends(get_token)) -> int:
 
 
 UserIdDep = Annotated[int, Depends(get_current_user_id)]
+
+
+async def get_current_user(
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db)
+) -> UserModel:
+    result = await db.execute(
+        select(UserModel).where(UserModel.id == user_id)
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Пользователь не найден"
+        )
+    return user
+
+
+async def get_current_admin(
+    user: UserModel = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> UserModel:
+    # Проверяем, что пользователь админ
+    result = await db.execute(
+        select(RoleModel).where(RoleModel.id == user.role_id)
+    )
+    role = result.scalar_one_or_none()
+    if not role or role.name != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Недостаточно прав администратора"
+        )
+    return user
 
 
 async def get_db():

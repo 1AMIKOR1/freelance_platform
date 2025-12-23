@@ -7,8 +7,8 @@ from app.exceptions.roles import (
     RoleNotFoundError,
     RoleNotFoundHTTPError,
 )
-from app.schemes.roles import SRoleAdd, SRoleGet
-from app.schemes.relations_users_roles import SRoleGetWithRels
+from app.schemas.roles import SRoleAdd, SRoleGet
+from app.schemas.relations_users_roles import SRoleGetWithRels
 from app.services.roles import RoleService
 
 router = APIRouter(prefix="/auth", tags=["Управление ролями"])

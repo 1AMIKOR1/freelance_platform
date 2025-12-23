@@ -9,14 +9,14 @@ from app.exceptions.auth import (
     JWTTokenExpiredError,
 )
 from app.exceptions.base import ObjectAlreadyExistsError
-from app.schemes.users import (
+from app.schemas.user import (
     SUserAdd,
     SUserAddRequest,
     SUserAuth,
 )
-from app.schemes.relations_users_roles import SUserGetWithRels
+from app.schemas.relations_users_roles import SUserGetWithRels
 from app.services.base import BaseService
-import jwt
+from jose import jwt
 from passlib.context import CryptContext
 
 

@@ -3,8 +3,8 @@ from sqlalchemy.orm import selectinload
 
 from app.models.users import UserModel
 from app.repositories.base import BaseRepository
-from app.schemes.users import SUserGet
-from app.schemes.relations_users_roles import SUserGetWithRels
+from app.schemas.user import SUserGet
+from app.schemas.relations_users_roles import SUserGetWithRels
 
 
 class UsersRepository(BaseRepository):
